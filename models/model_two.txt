@@ -6,7 +6,7 @@ model{
   alpha ~ dnorm(0, 0.001)
   ndvi_eff ~ dnorm(0, 0.001)
 
-  #  Random Effect on individual
+  #  Random Effect on individual - again this is an uninformed prior
   sd_ind ~ dunif(0, 100)
   tau_ind <- 1/(sd_ind^2)
 

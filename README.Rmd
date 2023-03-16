@@ -5,6 +5,17 @@ date: "`r format(Sys.time(), '%B %d, %Y')`"
 output: github_document
 ---
 
+# Resources on Bayesian:
+
+[Explanation of Components to Bayesian Stats](https://genproresearch.com/components-of-bayesian-approach/)
+
+[Beginners Guide to Bayesian Stats](https://www.quantstart.com/articles/Bayesian-Statistics-A-Beginners-Guide/)
+
+[Explanation of Bays Theory](https://www.youtube.com/watch?v=HZGCoVF3YvM)
+
+[Bookdown Bayesian Notes - Includes Diagnostics](https://jrnold.github.io/bayesian_notes/mcmc-diagnostics.html)
+
+
 ```{r setup, include=FALSE}
 require(knitr)
 knitr::opts_chunk$set(echo = TRUE, cache=TRUE, message = F)
@@ -19,17 +30,28 @@ The purpose of these scripts is to provide a simple entry point that allows the 
 
 ```{r packages}
 
-ipak <- function(pkg){
-  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
-  if (length(new.pkg)) 
-    install.packages(new.pkg, dependencies = TRUE)
-  sapply(pkg, require, character.only = TRUE)
-}
+# ipak <- function(pkg){
+#   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+#   if (length(new.pkg)) 
+#     install.packages(new.pkg, dependencies = TRUE)
+#   sapply(pkg, require, character.only = TRUE)
+# }
 
 #load or install these packages:
 packages <- c("tidyverse", "mcmcplots", "R2jags", "ResourceSelection","purrr", "glmmTMB")
 #run function to install packages
-ipak(packages)
+#ipak(packages)
+
+
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+      library(x, character.only = TRUE)
+    }
+  }
+)
 ```
 
 
@@ -37,25 +59,48 @@ ipak(packages)
 
 ```{r Model 1, echo=TRUE, message=FALSE, warning=FALSE}
 
+# simulate a set of probabilities that are influenced by NDVI
+
 rsf_m1dat <- tibble::tibble(
+  id = rep(1:3, each = 5),
   ndvi = rnorm(length(id)),
   pres = rbinom(length(id), size = 1, prob = plogis(0.5 + 0.3 * ndvi))
 )
 
+# we're trying to recover the parameters from this data set of the intercept 0.5 and the coefficient 0.3
+
+# steps: set up a linear model structure that defines that biological processes that created the dat we have - do this with prior distributions
+# 
+
+hist(rsf_m1dat$ndvi)
 # Exploring priors
+# visualize what our data is
 hist(plogis(rnorm(100000, 0, sqrt(1/0.001))), breaks = 100, col = "dodgerblue")
+# visualize what might our distributionbe
 hist(plogis(rnorm(100000, 0, sqrt(1/0.5))), breaks = 100, col = "dodgerblue")
+# what might the probability distribution of our binomial variables look like?
 hist(plogis(runif(10000, -5, 5)))
 
-# Gather data for JAGS - must be named list
-jdat_m1 <- list(
-  NOBS = nrow(rsf_m1dat),
+# we're looking for an estimate of the distribution that best matches our data
 
+# Gather data for JAGS - must be named list
+# this isn't different than our original dataframe, it's just reformatted into a list
+jdat_m1 <- list(
+  # number of rows equals the number of observations
+  NOBS = nrow(rsf_m1dat),
+  # bundle NDVI
   NDVI = rsf_m1dat$ndvi,
+  # bundle presence absence
   PRES = rsf_m1dat$pres
 )
 
+# first step: what is the model that we want to test
+## in this case: a binomial distribution with the effect of one covariate
+
+# next: tell the gibbs sampler where to start
+
 # Create initial values
+
 jinits <- function(){
   list(
     alpha = rnorm(1),
@@ -64,26 +109,40 @@ jinits <- function(){
 }
 
 # Parameters to monitor
+#these are the variables we're going to keep track of in every iteration
 params_m1 <- c("alpha", "ndvi_eff")
 ```
 
 You will need to have JAGS downloaded before you can run this code. Download [Here](http://www.sourceforge.net/projects/mcmc-jags/files). JAGS stands for Just Another Gibbs Sampler and quoting the program author, Martyn Plummer, “It is a program for analysis of Bayesian hierarchical models using Markov Chain Monte Carlo (MCMC) simulation…” 
 
+
+*Three ways of statistical inference: hypothesis testing, bayesian, bootstrap (numerical estimation)
+
 ```{r}
 #Call JAGS
 fit_m1 <- jags(
-  data = jdat_m1,
-  inits = jinits,
-  parameters.to.save = params_m1,
+  data = jdat_m1, #give it your data in list form
+  inits = jinits, # give it your starting values - one draw from a normal distribution with mean and standard deviation of 1
+  parameters.to.save = params_m1, # save the parameters
   model.file = "models/model_one.txt",
-  n.chains = 3,
-  n.burnin = 500,
-  n.iter = 600,
-  n.thin = 1
+  n.chains = 3, # run three parallel chains
+  n.burnin = 500, # have a burn in period - delete the first 500 of the iterations
+  n.iter = 600, # run the chains 600 times
+  n.thin = 1 # input 1 so that we're not thinning at all
 )
+
+# at every iteration, the gibbs sampler starts with random number/output and converts them to the model formula (model file) in this case univariate logistic regression, then compares it against the data and stores it
+
+# as it iterates through all of the values you gave it, it looks at every value of the data and sees how well the model fits
+## are you looking for model parameters or data???????
+# markov chain monte carlo- how does this work?
+## as its samplign bounces around, it calculates posterior prob that this model was what generated the observed data 
+
+# there are a lot of different types of MCMC samplers
 ```
 Here we write a function to summarise results, we write a function because this action willvbe repeated multiple times
 ```{r}
+# pull values out of JAGS software and put them into a tibble
 summ_fun <- function(x, param){
   tibble::tibble(
     Parameter = param,
@@ -100,9 +159,11 @@ grtr_zero <- function(x, param){
   sum(x$BUGS$sims.list[[param]] > 0)/length(x$BUGS$sims.list[[param]])
 }
 
+# now lets look at LCL and UCL - lower credible interval and upper credible interval 
 summ_fun(fit_m1, "alpha")
 summ_fun(fit_m1, "ndvi_eff")
 
+# check if it is greater than zero
 grtr_zero(fit_m1, "alpha")
 grtr_zero(fit_m1, "ndvi_eff")
 
@@ -115,33 +176,47 @@ purrr::map_df(c("alpha", "ndvi_eff"), ~summ_fun(fit_m1, .x))
 
 #  More generic
 purrr::map_df(params_m1, ~summ_fun(fit_m1, .x))
-
+# we just fit our first bayesian model with no random effects
 ```
 The mcmcplots package has several useful utilities to help with assessing convergence and examining model outputs
 
 ```{r}
 mcmcplots::mcmcplot(fit_m1)
+# diagnostics for alpha 
+# two plots on the right these charts show you that at first there is random variation but after a period of time (which you should put into the burn in period) they converge on an estimate
+# plot of left shows the variation in estimation across alpha (if the curves all look the same this is good)
+# bottom trace plot
+
+# deviance - how much unexplained variation is left in your model
+
+# plots for NDVI
+
+# if things don't converge, you need more iterations
+
+# credible interval doesn't rely on knowledge of the distirbution (isn't .96 + - the standard error)
 ```
 
 ## Model 2 - Bayesian Model with Random Intercept for Individual Elk
 
 ```{r Model 2, message=FALSE, warning=FALSE}
 
+# fitting a model that incorporates individual ID
 rsf_m2dat <- tibble::tibble(
   id = rep(1:3, each = 5),
   ndvi = rnorm(length(id)),
   pres = rbinom(length(id), size = 1, prob = plogis(0.5 + 0.3 * ndvi))
 )
 
-# Exploring priors
+# Exploring priors by visualizing them 
+# the way JAGS treats variance - puts it into something called tao that does into the inits list (variance is sqrt(1/0.001) to specify a big variance)
 hist(plogis(rnorm(100000, 0, sqrt(1/0.001))), breaks = 100, col = "dodgerblue")
 hist(plogis(rnorm(100000, 0, sqrt(1/0.5))), breaks = 100, col = "dodgerblue")
 hist(plogis(runif(10000, -5, 5)))
 
 # Gather data for JAGS - must be named list
 jdat_m2 <- list(
-  NOBS = nrow(rsf_m2dat),
-  NIND = n_distinct(rsf_m2dat$id),
+  NOBS = nrow(rsf_m2dat), 
+  NIND = n_distinct(rsf_m2dat$id), # list of individuals 
 
   IND = rsf_m2dat$id,
   NDVI = rsf_m2dat$ndvi,
@@ -175,8 +250,9 @@ grtr_zero(fit_m2, "ndvi_eff")
 
 
 ```{r}
-
+# parameter estimates from bayesian random effects model with random intercept
 purrr::map_df(c("alpha", "ndvi_eff"), ~summ_fun(fit_m2, .x))
+# credible interval now overlaps our true mean 
 
 #  More generic
 purrr::map_df(params_m2, ~summ_fun(fit_m2, .x))
@@ -186,6 +262,10 @@ purrr::map_df(params_m2, ~summ_fun(fit_m2, .x))
 
 ```{r}
 mcmcplots::mcmcplot(fit_m2)
+# this will show you all of the variance you specified in the model
+# plots for ndvi show you both fixed effects and random effects variance
+
+# how to figure outhow many chains, burn in period, chain length, or thinning is just to play around with it
 ```
 
 Also check out the Bayesian task view in R and tidybayes in particular
@@ -253,6 +333,11 @@ summary(goats.M2)
 goats.M3 <- glmmTMB(STATUS ~ TASP +  ELEVATION + (1|ID) + (0+ELEVATION |ID) + (0+TASP|ID), family=binomial(), data = goats)
 summary(goats.M3)
 
+# aspect can be transformed via sine or cosine to rescale it
+# you can transform aspect to the heat value based on the aspect that gets maximum solar radiation, which is what we have in this data
+# aspect is important for mountainous animals
+# maximum value for the transformed aspect means it is the warmest aspect
+
 ```
 
 ### Model M4 (with fixed intercept variance)
@@ -263,6 +348,7 @@ summary(goats.M3)
  Here, we also use a weighted likelihood. To this end, we need to create a variable for the weights, where used points (`STATUS=1`) keep weight 1, and available points (`STATUS=0`) obtain a large weight $W$ (here $W=1000$):
  
 ```{r}
+# correctly weight the variance to incorporate inhomogenous point process
 goats$weight <- 1000^(1-goats$STATUS)
 ```
 
@@ -290,6 +376,8 @@ goats.M4 <- glmmTMB:::fitTMB(goats.M4.tmp)
 summary(goats.M4)
 ```
 
+*strive to have the same number of 1 and 0 with used available models?*
+
 ### Model M4 (with intercept variance estimated)
 
 For comparison, we again fit model M4, but without fixing the intercept variance, letting it be estimated instead. Importantly, estimating the intercept variance is the current standard procedure. For this particular RSF case, it does not lead to a real difference, as expected due to the many observations per individual. This confirms that the decision to fix or estimate the intercept variance is not critical for RSFs, in contrast to SSFs (see Discussion in the paper).
@@ -308,8 +396,7 @@ Let us now carry the analysis of model M4 with random intercept $\mathsf{N}(0,\s
 goats$ID2 <- goats$ID3 <- goats$ID
 ```
 
- For the fixed effects we use the INLA (default) priors $\beta \sim \mathsf{N}(0,\sigma_\beta^2)$ with $\sigma_\beta^2=10^4$. The precisions of the priors are thus set to:
-
+ For the fixed effects we use the INLA (default) priors (which are uniform/uninformed) $\beta \sim \mathsf{N}(0,\sigma_\beta^2)$ with $\sigma_\beta^2=10^4$. The precisions of the priors are thus set to:
 
 ```{r}
 prec.beta.TASP  <- 1e-4
@@ -320,7 +407,7 @@ The INLA formula with the fixed effects `TASP` and `ELEVATION`, plus three rando
 
 ```{r}
 formula.inla <-STATUS ~  TASP  + ELEVATION +
-  f(ID,model="iid",hyper=list(theta = list(initial=log(1e-6),fixed=T))) +
+  f(ID,model="iid",hyper=list(theta = list(initial=log(1e-6),fixed=T))) + # f means a random effect for the independently identically distributed model 
   f(ID2,TASP,values=1:10,model="iid",
     hyper=list(theta=list(initial=log(1),fixed=F,prior="pc.prec",param=c(1,0.05)))) +
   f(ID3,ELEVATION,values=1:10,model="iid",
@@ -335,7 +422,7 @@ goats.M4.inla  <- inla(formula.inla, family ="binomial", data=goats, weights=goa
                        control.fixed = list(
                          mean = 0,
                          prec = list(TASP = prec.beta.TASP,
-                                     ELEVATION = prec.beta.ELEVATION)
+                                     ELEVATION = prec.beta.ELEVATION) # MCMC controls
                        )
 )
 ```
